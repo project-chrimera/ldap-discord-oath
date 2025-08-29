@@ -1,0 +1,23 @@
+# -----------------------------
+# Discord OAuth2 Settings
+# -----------------------------
+DISCORD_CLIENT_ID=1234
+DISCORD_CLIENT_SECRET=1234567
+REDIRECT_URI=https://auth.yetanotherprojecttosavetheworld.org/proxy/callback
+SERVER_NAME=auth.yetanotherprojecttosavetheworld.org
+DISCORD_SCOPE=identify email
+HA_URL=http://127.0.0.1:8123
+# -----------------------------
+# LDAP Settings (optional)
+# -----------------------------
+LDAP_SERVER=ldap://127.0.0.1
+LDAP_BIND_DN=cn=admin,dc=yetanotherprojecttosavetheworld,dc=org
+LDAP_BIND_PASSWORD=password
+LDAP_BASE_DN=dc=yetanotherprojecttosavetheworld,dc=org
+LDAP_GROUPS_DN="cn=hass,ou=groups,dc=yetanotherprojecttosavetheworld,dc=org;cn=hassAdmin,ou=groups,dc=yetanotherprojecttosavetheworld,dc=org"
+
+# -----------------------------
+# Proxy / App Settings
+# -----------------------------
+PROXY_HOST=127.0.0.1
+PROXY_PORT=4180
