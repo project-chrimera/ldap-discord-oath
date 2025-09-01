@@ -1,0 +1,9 @@
+{
+  "hass": [
+    "cn=hass,ou=groups,dc=yetanotherprojecttosavetheworld,dc=org",
+    "cn=hassAdmin,ou=groups,dc=yetanotherprojecttosavetheworld,dc=org"
+  ],
+  "webaccess": [
+    "cn=webaccess,ou=groups,dc=yetanotherprojecttosavetheworld,dc=org"
+  ]
+}
