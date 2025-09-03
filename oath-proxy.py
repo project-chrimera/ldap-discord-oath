@@ -129,25 +129,33 @@ async def apache_redirect(request: Request):
     redirect_url = f"/openid/authorize?{urlencode(params)}"
     return RedirectResponse(redirect_url)
 
-
-# OpenID Connect well-known configuratie
-@app.get("/.well-known/openid-configuration")
-async def well_known_openid_config():
-    base = f"https://{SERVER_NAME}"
-    return {
-        "issuer": f"{base}/",
-        "authorization_endpoint": f"{base}/openid/authorize",
-        "token_endpoint": f"{base}/openid/token",
-        "userinfo_endpoint": f"{base}/openid/userinfo",
-        "jwks_uri": f"{base}/openid/jwks",
-        "response_types_supported": ["code", "id_token", "token id_token"],
+@app.get("/auth/.well-known/openid-configuration")
+async def auth_well_known_openid_config():
+    base = f"https://{SERVER_NAME}/auth/openid"
+    config = {
+        "issuer": base,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "userinfo_endpoint": f"{base}/userinfo",
+        "jwks_uri": f"{base}/jwks",
+        "response_types_supported": ["code"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
         "scopes_supported": ["openid", "email", "profile"],
         "claims_supported": ["sub", "preferred_username", "email"],
         "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
-        "grant_types_supported": ["authorization_code", "implicit"]
+        "grant_types_supported": ["authorization_code"]
     }
+
+    # Add HA-friendly defaults for missing keys
+    if "authorize_url" not in config:
+        config["authorize_url"] = config["authorization_endpoint"]
+    if "token_url" not in config:
+        config["token_url"] = config["token_endpoint"]
+    if "userinfo_url" not in config:
+        config["userinfo_url"] = config["userinfo_endpoint"]
+
+    return config
 
 # OpenID Connect well-known configuratie (voor Home Assistant)
 @app.get("/auth/.well-known/openid-configuration")
@@ -167,6 +175,10 @@ async def auth_well_known_openid_config():
         "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
         "grant_types_supported": ["authorization_code"]
     }
+
+@app.get("/auth/openid/userinfo")
+async def auth_openid_userinfo(request: Request):
+    return await userinfo_common(request)
 
 # OpenID Connect autorisatie endpoint (voor Apache mod_auth_openidc)
 @app.get("/openid/authorize")
