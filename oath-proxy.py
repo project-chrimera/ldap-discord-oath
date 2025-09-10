@@ -129,7 +129,7 @@ async def apache_redirect(request: Request):
     redirect_url = f"/openid/authorize?{urlencode(params)}"
     return RedirectResponse(redirect_url)
 
-@app.get("/auth/.well-known/openid-configuration")
+@app.get("/.well-known/openid-configuration")
 async def auth_well_known_openid_config():
     base = f"https://{SERVER_NAME}/auth/openid"
     config = {
@@ -156,25 +156,6 @@ async def auth_well_known_openid_config():
         config["userinfo_url"] = config["userinfo_endpoint"]
 
     return config
-
-# OpenID Connect well-known configuratie (voor Home Assistant)
-@app.get("/auth/.well-known/openid-configuration")
-async def auth_well_known_openid_config():
-    base = f"https://{SERVER_NAME}/auth/openid"
-    return {
-        "issuer": base,
-        "authorization_endpoint": f"{base}/authorize",
-        "token_endpoint": f"{base}/token",
-        "userinfo_endpoint": f"{base}/userinfo",
-        "jwks_uri": f"{base}/jwks",
-        "response_types_supported": ["code"],
-        "subject_types_supported": ["public"],
-        "id_token_signing_alg_values_supported": ["HS256"],
-        "scopes_supported": ["openid", "email", "profile"],
-        "claims_supported": ["sub", "preferred_username", "email"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
-        "grant_types_supported": ["authorization_code"]
-    }
 
 @app.get("/auth/openid/userinfo")
 async def auth_openid_userinfo(request: Request):
@@ -224,7 +205,6 @@ async def authorize_common(request: Request, prefix: str):
     return RedirectResponse(discord_url)
 
 # Discord OAuth2 callback
-# Discord OAuth2 callback
 @app.get("/proxy/callback")
 async def proxy_callback(request: Request):
     discord_code = request.query_params.get("code")
@@ -245,6 +225,7 @@ async def proxy_callback(request: Request):
     if not allowed_ous:
         return JSONResponse({"error": f"no OUs configured for client_id: {client_id}"}, status_code=403)
 
+    # --- Exchange code for Discord token ---
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(
@@ -273,7 +254,9 @@ async def proxy_callback(request: Request):
     except httpx.HTTPStatusError as e:
         return JSONResponse({"error": f"HTTP error during Discord OAuth: {e}", "details": e.response.text}, status_code=e.response.status_code)
 
-    user_uid = None  # Initialize UID variable
+    # --- Lookup user UID and WP username ---
+    user_uid = None
+    wp_username = None
 
     if LDAP_SERVER:
         try:
@@ -283,19 +266,16 @@ async def proxy_callback(request: Request):
                 if not email:
                     return JSONResponse({"error": "no email from Discord"}, status_code=400)
                 
-                # Search for user and get UID attribute
-                conn.search(LDAP_BASE_DN, f"(mail={email})", SUBTREE, attributes=["uid", "mail", "cn"])
+                # Search LDAP for user
+                conn.search(LDAP_BASE_DN, f"(mail={email})", SUBTREE, attributes=["uid", "cn", "mail"])
                 if not conn.entries:
                     return JSONResponse({"error": "unauthorized: email not found in LDAP"}, status_code=403)
-                
-                # Extract UID from LDAP entry
+
                 user_entry = conn.entries[0]
-                user_uid = user_entry.uid.value if hasattr(user_entry, 'uid') else None
-                if not user_uid:
-                    return JSONResponse({"error": "UID not found in LDAP entry"}, status_code=400)
-                
+                user_uid = user_entry.uid.value if hasattr(user_entry, 'uid') else email
+                wp_username = user_entry.cn.value if hasattr(user_entry, 'cn') else user_uid
+
                 user_dn = user_entry.entry_dn
-                
                 is_member_of_any_group = False
                 for group_dn in allowed_ous:
                     conn.search(group_dn, f"(&(objectClass=groupOfNames)(member={user_dn}))", SUBTREE)
@@ -305,27 +285,30 @@ async def proxy_callback(request: Request):
 
                 if not is_member_of_any_group:
                     return JSONResponse({"error": f"forbidden: not a member of any required groups for client {client_id}"}, status_code=403)
+
         except Exception as e:
             return JSONResponse({"error": f"LDAP error: {e}"}, status_code=500)
     else:
-        # Fallback to email if no LDAP (for testing)
+        # fallback if no LDAP
         user_uid = user.get("email")
+        wp_username = user.get("username", user_uid)
 
     if not user_uid:
         return JSONResponse({"error": "User UID not found"}, status_code=400)
-    
-    # Store UID instead of email in session
+
+    # Store in session for token generation
     SESSIONS[session_id]["user_uid"] = user_uid
+    SESSIONS[session_id]["wp_username"] = wp_username
 
     ha_redirect_uri = SESSIONS[session_id]["ha_redirect_uri"]
     ha_state = SESSIONS[session_id]["ha_state"]
 
     redirect_url = f"{ha_redirect_uri}?code={session_id}&state={ha_state}"
-    
-    # Voeg een print statement toe voor debugging
-    print(f"Debug: Omleiden naar {redirect_url}")
+    print(f"Debug: Redirecting to {redirect_url}")
     
     return RedirectResponse(redirect_url)
+
+
 
 # JWKS endpoint
 @app.get("/openid/jwks")
@@ -365,18 +348,20 @@ async def auth_openid_token(request: Request):
 async def token_common(request: Request):
     form = await request.form()
     session_id = form.get("code")
-    client_id = form.get("client_id", "webaccess")  # Verkrijg client_id uit verzoek of gebruik standaardwaarde
+    client_id = form.get("client_id", "webaccess")
     code_verifier = form.get("code_verifier")
 
     if session_id not in SESSIONS:
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
     user_info = SESSIONS.pop(session_id)
-    user_uid = user_info.get("user_uid")  # Changed from user_email to user_uid
+    user_uid = user_info.get("user_uid")
+    wp_username = user_info.get("wp_username", user_uid)
+
     if not user_uid:
         return JSONResponse({"error": "user UID not found for this code"}, status_code=400)
-        
-    # PKCE validatie
+
+    # PKCE validation
     code_challenge = user_info.get("code_challenge")
     code_challenge_method = user_info.get("code_challenge_method")
     if code_challenge and code_challenge_method == "S256":
@@ -385,30 +370,30 @@ async def token_common(request: Request):
         if hashed_verifier != code_challenge:
             return JSONResponse({"error": "invalid_grant", "error_description": "PKCE code_verifier mismatch"}, status_code=400)
 
-    # Genereer zowel access token als id_token
-    access_token = jwt.encode({"sub": user_uid}, JWT_SECRET, algorithm="HS256")  # Changed to user_uid
-    
-    # Maak id_token met de juiste OIDC claims met RS256
+    # Generate access token
+    access_token = jwt.encode({"sub": user_uid}, JWT_SECRET, algorithm="HS256")
+
+    # id_token with WP-compatible claims
     id_token_payload = {
-        "sub": user_uid,  # Changed to user_uid
-        "email": user_info.get("user_email", ""),  # Keep email if available for compatibility
-        "preferred_username": user_uid,  # Changed to user_uid
+        "sub": user_uid,
+        "email": user_info.get("user_email", user_uid),
+        "preferred_username": wp_username,
         "iss": f"https://{SERVER_NAME}/",
         "aud": client_id,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),
         "iat": datetime.datetime.utcnow(),
         "nonce": user_info.get("nonce")
     }
-    
-    # Gebruik RS256 voor id_token met de private sleutel
+
     id_token = jwt.encode(id_token_payload, PRIVATE_KEY, algorithm="RS256")
-    
+
     return {
         "access_token": access_token,
         "id_token": id_token,
         "token_type": "bearer",
         "expires_in": 3600
     }
+
 
 # Userinfo endpoint (voor Apache mod_auth_openidc)
 @app.get("/openid/userinfo")
